@@ -55,7 +55,7 @@ class rcube_spellchecker
             'dictionary'  => $this->rc->config->get('spellcheck_dictionary'),
         );
 
-        $cls = 'rcube_spellcheck_' . $this->engine;
+        $cls = 'rcube_spellchecker_' . $this->engine;
         if (class_exists($cls)) {
             $this->backend = new $cls($this, $this->lang);
             $this->backend->options = $this->options;
@@ -87,7 +87,7 @@ class rcube_spellchecker
 
         // add correct labels
         $languages = array();
-        foreach ($langs as $lang) {
+        foreach ((array) $langs as $lang) {
             $langc = strtolower(substr($lang, 0, 2));
             $alias = $rcube_language_aliases[$langc];
             if (!$alias) {
@@ -255,7 +255,7 @@ class rcube_spellchecker
     }
 
     /**
-     * Check if the specified word is an exception accoring to 
+     * Check if the specified word is an exception according to 
      * spellcheck options.
      *
      * @param string  $word  The word

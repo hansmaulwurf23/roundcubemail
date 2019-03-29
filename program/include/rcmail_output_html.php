@@ -36,18 +36,21 @@ class rcmail_output_html extends rcmail_output
     protected $js_labels    = array();
     protected $js_commands  = array();
     protected $skin_paths   = array();
+    protected $skin_name    = '';
     protected $scripts_path = '';
     protected $script_files = array();
     protected $css_files    = array();
     protected $scripts      = array();
-    protected $default_template = "<html>\n<head><title></title></head>\n<body></body>\n</html>";
-    protected $header = '';
-    protected $footer = '';
-    protected $body   = '';
-    protected $base_path = '';
+    protected $meta_tags    = array();
+    protected $link_tags    = array('shortcut icon' => '');
+    protected $header       = '';
+    protected $footer       = '';
+    protected $body         = '';
+    protected $base_path    = '';
     protected $assets_path;
-    protected $assets_dir = RCUBE_INSTALL_PATH;
-    protected $devel_mode = false;
+    protected $assets_dir   = RCUBE_INSTALL_PATH;
+    protected $devel_mode   = false;
+    protected $default_template = "<html>\n<head><title></title></head>\n<body></body>\n</html>";
 
     // deprecated names of templates used before 0.5
     protected $deprecated_templates = array(
@@ -56,6 +59,18 @@ class rcmail_output_html extends rcmail_output
         'contactedit'  => 'editcontact',
         'identityedit' => 'editidentity',
         'messageprint' => 'printmessage',
+    );
+
+    // deprecated names of template objects used before 1.4
+    protected $deprecated_template_objects = array(
+        'addressframe'        => 'contentframe',
+        'messagecontentframe' => 'contentframe',
+        'prefsframe'          => 'contentframe',
+        'folderframe'         => 'contentframe',
+        'identityframe'       => 'contentframe',
+        'responseframe'       => 'contentframe',
+        'keyframe'            => 'contentframe',
+        'filterframe'         => 'contentframe',
     );
 
     /**
@@ -68,21 +83,29 @@ class rcmail_output_html extends rcmail_output
         $this->devel_mode = $this->config->get('devel_mode');
 
         $this->set_env('task', $task);
-        $this->set_env('x_frame_options', $this->config->get('x_frame_options', 'sameorigin'));
         $this->set_env('standard_windows', (bool) $this->config->get('standard_windows'));
         $this->set_env('locale', $_SESSION['language']);
         $this->set_env('devel_mode', $this->devel_mode);
+
+        // Version number e.g. 1.4.2 will be 10402
+        $version = explode('.', preg_replace('/[^0-9.].*/', '', RCMAIL_VERSION));
+        $this->set_env('rcversion', $version[0] * 10000 + $version[1] * 100 + $version[2]);
 
         // add cookie info
         $this->set_env('cookie_domain', ini_get('session.cookie_domain'));
         $this->set_env('cookie_path', ini_get('session.cookie_path'));
         $this->set_env('cookie_secure', filter_var(ini_get('session.cookie_secure'), FILTER_VALIDATE_BOOLEAN));
 
-        // load the correct skin (in case user-defined)
-        $skin = $this->config->get('skin');
-        $this->set_skin($skin);
-        $this->set_env('skin', $skin);
+        // Easy way to change skin via GET argument, for developers
+        if ($this->devel_mode && !empty($_GET['skin']) && preg_match('/^[a-z0-9-_]+$/i', $_GET['skin'])) {
+            if ($this->check_skin($_GET['skin'])) {
+                $this->set_skin($_GET['skin']);
+                $this->app->user->save_prefs(array('skin' => $_GET['skin']));
+            }
+        }
 
+        // load and setup the skin
+        $this->set_skin($this->config->get('skin'));
         $this->set_assets_path($this->config->get('assets_path'), $this->config->get('assets_dir'));
 
         if (!empty($_REQUEST['_extwin']))
@@ -131,6 +154,10 @@ EOF;
             'charsetselector' => array($this, 'charset_selector'),
             'aboutcontent'    => array($this, 'about_content'),
         ));
+
+        // set blankpage (watermark) url
+        $blankpage = $this->config->get('blankpage_url', '/watermark.html');
+        $this->set_env('blankpage', $blankpage);
     }
 
     /**
@@ -224,13 +251,45 @@ EOF;
     }
 
     /**
+     * Getter for the current skin path property
+     */
+    public function get_skin_path()
+    {
+        return $this->skin_paths[0];
+    }
+
+    /**
      * Set skin
+     *
+     * @param string $skin Skin name
+     */
+    public function set_skin($skin)
+    {
+        if (!$this->check_skin($skin)) {
+            $skin = rcube_config::DEFAULT_SKIN;
+        }
+
+        $skin_path = 'skins/' . $skin;
+
+        $this->config->set('skin_path', $skin_path);
+        $this->base_path = $skin_path;
+
+        // register skin path(s)
+        $this->skin_paths = array();
+        $this->load_skin($skin_path);
+
+        $this->skin_name = $skin;
+        $this->set_env('skin', $skin);
+    }
+
+    /**
+     * Check skin validity/existence
      *
      * @param string $skin Skin name
      *
      * @return bool True if the skin exist and is readable, False otherwise
      */
-    public function set_skin($skin)
+    public function check_skin($skin)
     {
         // Sanity check to prevent from path traversal vulnerability (#1490620)
         if (strpos($skin, '/') !== false || strpos($skin, "\\") !== false) {
@@ -243,31 +302,9 @@ EOF;
             return false;
         }
 
-        $valid = false;
-        $path  = RCUBE_INSTALL_PATH . 'skins/';
+        $path = RCUBE_INSTALL_PATH . 'skins/';
 
-        if (!empty($skin) && is_dir($path . $skin) && is_readable($path . $skin)) {
-            $skin_path = 'skins/' . $skin;
-            $valid     = true;
-        }
-        else {
-            $skin_path = $this->config->get('skin_path');
-            if (!$skin_path) {
-                $skin_path = 'skins/' . rcube_config::DEFAULT_SKIN;
-            }
-            $valid = !$skin;
-        }
-
-        $skin_path = rtrim($skin_path, '/');
-
-        $this->config->set('skin_path', $skin_path);
-        $this->base_path = $skin_path;
-
-        // register skin path(s)
-        $this->skin_paths = array();
-        $this->load_skin($skin_path);
-
-        return $valid;
+        return !empty($skin) && is_dir($path . $skin) && is_readable($path . $skin);
     }
 
     /**
@@ -277,7 +314,7 @@ EOF;
     {
         $this->skin_paths[] = $skin_path;
 
-        // read meta file and check for dependecies
+        // read meta file and check for dependencies
         $meta = @file_get_contents(RCUBE_INSTALL_PATH . $skin_path . '/meta.json');
         $meta = @json_decode($meta, true);
 
@@ -291,12 +328,38 @@ EOF;
 
         $this->skins[$skin_id] = $meta;
 
+        // Keep skin config for ajax requests (#6613)
+        $_SESSION['skin_config'] = array();
+
         if ($meta['extends']) {
             $path = RCUBE_INSTALL_PATH . 'skins/';
             if (is_dir($path . $meta['extends']) && is_readable($path . $meta['extends'])) {
-                $this->load_skin('skins/' . $meta['extends']);
+                $_SESSION['skin_config'] = $this->load_skin('skins/' . $meta['extends']);
             }
         }
+
+        if (!empty($meta['config'])) {
+            foreach ($meta['config'] as $key => $value) {
+                $this->config->set($key, $value, true);
+                $_SESSION['skin_config'][$key] = $value;
+            }
+
+            $value = array_merge((array) $this->config->get('dont_override'), array_keys($meta['config']));
+            $this->config->set('dont_override', $value, true);
+        }
+
+        if (!empty($meta['localization'])) {
+            $locdir = $meta['localization'] === true ? 'localization' : $meta['localization'];
+            if ($texts = $this->app->read_localization(RCUBE_INSTALL_PATH . $skin_path . '/' . $locdir)) {
+                $this->app->load_language($_SESSION['language'], $texts);
+            }
+        }
+
+        // Use array_merge() here to allow for global default and extended skins
+        $this->meta_tags = array_merge($this->meta_tags, (array) $meta['meta']);
+        $this->link_tags = array_merge($this->link_tags, (array) $meta['links']);
+
+        return $_SESSION['skin_config'];
     }
 
     /**
@@ -332,27 +395,35 @@ EOF;
     public function get_skin_file($file, &$skin_path = null, $add_path = null)
     {
         $skin_paths = $this->skin_paths;
+
         if ($add_path) {
             array_unshift($skin_paths, $add_path);
+            $skin_paths = array_unique($skin_paths);
         }
 
-        foreach ($skin_paths as $skin_path) {
-            $path = realpath(RCUBE_INSTALL_PATH . $skin_path . $file);
-
-            if ($path && is_file($path)) {
-                return $skin_path . $file;
-            }
-
-            if ($this->assets_dir != RCUBE_INSTALL_PATH) {
-                $path = realpath($this->assets_dir . $skin_path . $file);
-
-                if ($path && is_file($path)) {
-                    return $skin_path . $file;
-                }
-            }
+        if ($skin_path = $this->find_file_path($file, $skin_paths)) {
+            return $skin_path . $file;
         }
 
         return false;
+    }
+
+    /**
+     * Find path of the asset file
+     */
+    protected function find_file_path($file, $skin_paths)
+    {
+        foreach ($skin_paths as $skin_path) {
+            if ($this->assets_dir != RCUBE_INSTALL_PATH) {
+                if (realpath($this->assets_dir . $skin_path . $file)) {
+                    return $skin_path;
+                }
+            }
+
+            if (realpath(RCUBE_INSTALL_PATH . $skin_path . $file)) {
+                return $skin_path;
+            }
+        }
     }
 
     /**
@@ -432,7 +503,25 @@ EOF;
     public function reset($all = false)
     {
         $framed = $this->framed;
+        $task   = $this->env['task'];
         $env    = $all ? null : array_intersect_key($this->env, array('extwin'=>1, 'framed'=>1));
+
+        // keep jQuery-UI files
+        $css_files = $script_files = array();
+
+        foreach ($this->css_files as $file) {
+            if (strpos($file, 'plugins/jqueryui') === 0) {
+                $css_files[] = $file;
+            }
+        }
+
+        foreach ($this->script_files as $position => $files) {
+            foreach ($files as $file) {
+                if (strpos($file, 'plugins/jqueryui') === 0) {
+                    $script_files[$position][] = $file;
+                }
+            }
+        }
 
         parent::reset();
 
@@ -441,16 +530,23 @@ EOF;
         $this->framed       = $framed || $this->env['framed'];
         $this->js_labels    = array();
         $this->js_commands  = array();
-        $this->script_files = array();
         $this->scripts      = array();
         $this->header       = '';
         $this->footer       = '';
         $this->body         = '';
+        $this->css_files    = array();
+        $this->script_files = array();
 
         // load defaults
         if (!$all) {
             $this->__construct();
         }
+
+        // Note: we merge jQuery-UI scripts after jQuery...
+        $this->css_files    = array_merge($this->css_files, $css_files);
+        $this->script_files = array_merge_recursive($this->script_files, $script_files);
+
+        $this->set_env('orig_task', $task);
     }
 
     /**
@@ -471,7 +567,7 @@ EOF;
 
     /**
      * Send the request output to the client.
-     * This will either parse a skin tempalte or send an AJAX response
+     * This will either parse a skin template.
      *
      * @param string  $templ Template name
      * @param boolean $exit  True if script should terminate (default)
@@ -513,11 +609,17 @@ EOF;
             $this->set_env('request_token', $this->app->get_request_token());
         }
 
+        // Fix assets path on blankpage
+        if ($this->js_env['blankpage']) {
+            $this->js_env['blankpage'] = $this->asset_url($this->abs_url($this->js_env['blankpage'], true));
+        }
+
         $commands = $this->get_js_commands($framed);
 
         // if all js commands go to parent window we can ignore all
         // script files and skip rcube_webmail initialization (#1489792)
-        if ($framed) {
+        // but not on error pages where skins may need jQuery, etc.
+        if ($framed && empty($this->js_env['server_error'])) {
             $this->scripts      = array();
             $this->script_files = array();
             $this->header       = '';
@@ -525,18 +627,33 @@ EOF;
         }
 
         // write all javascript commands
-        $this->add_script($commands, 'head_top');
-
-        // allow (legal) iframe content to be loaded
-        $iframe = $this->framed || $this->env['framed'];
-        if (!headers_sent() && $iframe && ($xopt = $this->app->config->get('x_frame_options', 'sameorigin'))) {
-            if (strtolower($xopt) != 'sameorigin') {
-                header('X-Frame-Options: sameorigin', true);
-            }
+        if (!empty($commands)) {
+            $this->add_script($commands, 'head_top');
         }
+
+        $this->page_headers();
 
         // call super method
         $this->_write($template, $this->config->get('skin_path'));
+    }
+
+    /**
+     * Send common page headers
+     * For now it only (re)sets X-Frame-Options when needed
+     */
+    public function page_headers()
+    {
+        if (headers_sent()) {
+            return;
+        }
+
+        // allow (legal) iframe content to be loaded
+        $framed = $this->framed || $this->env['framed'];
+        if ($framed && ($xopt = $this->app->config->get('x_frame_options', 'sameorigin'))) {
+            if (strtolower($xopt) === 'deny') {
+                header('X-Frame-Options: sameorigin', true);
+            }
+        }
     }
 
     /**
@@ -567,12 +684,6 @@ EOF;
                 $plugin_skin_paths[] = $this->app->plugins->url . $plugin . '/' . $skin_path;
             }
 
-            // add fallback to default skin
-            if (is_dir($this->app->plugins->dir . $plugin . '/skins/default')) {
-                $skin_dir = $plugin . '/skins/default';
-                $plugin_skin_paths[] = $this->app->plugins->url . $skin_dir;
-            }
-
             // prepend plugin skin paths to search list
             $this->skin_paths = array_merge($plugin_skin_paths, $this->skin_paths);
         }
@@ -580,6 +691,11 @@ EOF;
         // find skin template
         $path = false;
         foreach ($this->skin_paths as $skin_path) {
+            // when requesting a plugin template ignore global skin path(s)
+            if ($plugin && strpos($skin_path, $this->app->plugins->url) !== 0) {
+                continue;
+            }
+
             $path = RCUBE_INSTALL_PATH . "$skin_path/templates/$name.html";
 
             // fallback to deprecated template names
@@ -635,7 +751,8 @@ EOF;
         $output = $this->parse_xml($output);
 
         // trigger generic hook where plugins can put additional content to the page
-        $hook = $this->app->plugins->exec_hook("render_page", array('template' => $realname, 'content' => $output));
+        $hook = $this->app->plugins->exec_hook("render_page", array(
+                'template' => $realname, 'content' => $output, 'write' => $write));
 
         // save some memory
         $output = $hook['content'];
@@ -788,7 +905,7 @@ EOF;
     }
 
     /**
-     * Callback funtion for preg_replace_callback() in parse_with_globals()
+     * Callback function for preg_replace_callback() in parse_with_globals()
      */
     protected function globals_callback($matches)
     {
@@ -796,13 +913,12 @@ EOF;
     }
 
     /**
-     * Correct absolute paths in images and other tags
-     * add timestamp to .js and .css filename
+     * Correct absolute paths in images and other tags (add cache busters)
      */
     protected function fix_paths($output)
     {
         return preg_replace_callback(
-            '!(src|href|background)=(["\']?)([a-z0-9/_.-]+)(["\'\s>])!i',
+            '!(src|href|background|data-src-[a-z]+)=(["\']?)([a-z0-9/_.-]+)(["\'\s>])!i',
             array($this, 'file_callback'), $output);
     }
 
@@ -818,11 +934,12 @@ EOF;
 
         // correct absolute paths
         if ($file[0] == '/') {
-            $file = $this->base_path . $file;
+            $this->get_skin_file($file, $skin_path, $this->base_path);
+            $file = ($skin_path ?: $this->base_path) . $file;
         }
 
         // add file modification timestamp
-        if (preg_match('/\.(js|css)$/', $file, $m)) {
+        if (preg_match('/\.(js|css|less|ico|png|svg|jpeg)$/', $file, $m)) {
             $file = $this->file_mod($file);
         }
 
@@ -984,27 +1101,58 @@ EOF;
             ),
             array(
                 "\$_SESSION['\\1']",
-                "\$app->config->get('\\1',rcube_utils::get_boolean('\\3'))",
-                "\$env['\\1']",
+                "\$this->app->config->get('\\1',rcube_utils::get_boolean('\\3'))",
+                "\$this->env['\\1']",
                 "rcube_utils::get_input_value('\\1', rcube_utils::INPUT_GPC)",
                 "\$_COOKIE['\\1']",
-                "\$browser->{'\\1'}",
-                "'" . $this->template_name . "'",
+                "\$this->browser->{'\\1'}",
+                "'{$this->template_name}'",
             ),
             $expression
         );
 
-        $fn = create_function('$app,$browser,$env', "return ($expression);");
-        if (!$fn) {
-            rcube::raise_error(array(
-                    'code' => 505, 'file' => __FILE__, 'line' => __LINE__,
-                    'message' => "Expression parse error on: ($expression)"
-                ), true, false);
+        // Note: We used create_function() before but it's deprecated in PHP 7.2
+        //       and really it was just a wrapper on eval().
+        return eval("return ($expression);");
+    }
 
-            return;
+    /**
+     * Parse variable strings
+     *
+     * @param string $type Variable type (env, config etc)
+     * @param string $name Variable name
+     *
+     * @return mixed Variable value
+     */
+    protected function parse_variable($type, $name)
+    {
+        $value = '';
+
+        switch ($type) {
+            case 'env':
+                $value = $this->env[$name];
+                break;
+            case 'config':
+                $value = $this->config->get($name);
+                if (is_array($value) && $value[$_SESSION['storage_host']]) {
+                    $value = $value[$_SESSION['storage_host']];
+                }
+                break;
+            case 'request':
+                $value = rcube_utils::get_input_value($name, rcube_utils::INPUT_GPC);
+                break;
+            case 'session':
+                $value = $_SESSION[$name];
+                break;
+            case 'cookie':
+                $value = htmlspecialchars($_COOKIE[$name], ENT_COMPAT | ENT_HTML401, RCUBE_CHARSET);
+                break;
+            case 'browser':
+                $value = $this->browser->{$name};
+                break;
         }
 
-        return $fn($this->app, $this->browser, $this->env);
+        return $value;
     }
 
     /**
@@ -1012,18 +1160,13 @@ EOF;
      * with the appropriate content
      *
      * @param string $input Input string to parse
-     * @param bool   $reset Reset stored objects
      *
      * @return string Altered input string
      * @todo   Use DOM-parser to traverse template HTML
      * @todo   Maybe a cache.
      */
-    protected function parse_xml($input, $reset = true)
+    protected function parse_xml($input)
     {
-        if ($reset) {
-            $this->objects = array();
-        }
-
         return preg_replace_callback('/<roundcube:([-_a-z]+)\s+((?:[^>]|\\\\>)+)(?<!\\\\)>/Ui', array($this, 'xml_command'), $input);
     }
 
@@ -1107,8 +1250,21 @@ EOF;
 
             // include a file
             case 'include':
-                $old_base_path = $this->base_path;
-                if (!empty($attrib['skin_path'])) $attrib['skinpath'] = $attrib['skin_path'];
+                if ($attrib['condition'] && !$this->check_condition($attrib['condition'])) {
+                    break;
+                }
+
+                if ($attrib['file'][0] != '/') {
+                    $attrib['file'] = '/templates/' . $attrib['file'];
+                }
+
+                $old_base_path    = $this->base_path;
+                $include          = '';
+
+                if (!empty($attrib['skin_path'])) {
+                    $attrib['skinpath'] = $attrib['skin_path'];
+                }
+
                 if ($path = $this->get_skin_file($attrib['file'], $skin_path, $attrib['skinpath'])) {
                     // set base_path to core skin directory (not plugin's skin)
                     $this->base_path = preg_replace('!plugins/\w+/!', '', $skin_path);
@@ -1116,19 +1272,16 @@ EOF;
                 }
 
                 if (is_readable($path)) {
-                    if ($this->config->get('skin_include_php')) {
-                        $incl = $this->include_php($path);
-                    }
-                    else {
-                      $incl = file_get_contents($path);
-                    }
-                    $incl = $this->parse_conditions($incl);
-                    $incl = $this->parse_xml($incl, false);
-                    $incl = $this->fix_paths($incl);
-                    $this->base_path = $old_base_path;
-                    return $incl;
+                    $allow_php = $this->config->get('skin_include_php');
+                    $include   = $allow_php ? $this->include_php($path) : file_get_contents($path);
+                    $include   = $this->parse_conditions($include);
+                    $include   = $this->parse_xml($include);
+                    $include   = $this->fix_paths($include);
                 }
-                break;
+
+                $this->base_path = $old_base_path;
+
+                return $include;
 
             case 'plugin.include':
                 $hook = $this->app->plugins->exec_hook("template_plugin_include", $attrib);
@@ -1149,16 +1302,22 @@ EOF;
                 $object  = strtolower($attrib['name']);
                 $content = '';
 
-                // we are calling a class/method
-                if (($handler = $this->object_handlers[$object]) && is_array($handler)) {
-                    if ((is_object($handler[0]) && method_exists($handler[0], $handler[1])) ||
-                    (is_string($handler[0]) && class_exists($handler[0])))
-                    $content  = call_user_func($handler, $attrib);
-                    $external = true;
+                // correct deprecated object names
+                if ($this->deprecated_template_objects[$object]) {
+                    $object = $this->deprecated_template_objects[$object];
                 }
+
+                $handler = $this->object_handlers[$object];
+
                 // execute object handler function
-                else if (function_exists($handler)) {
-                    $content = call_user_func($handler, $attrib);
+                if (is_callable($handler)) {
+                    $this->prepare_object_attribs($attrib);
+
+                    // We assume that objects with src attribute are internal (in most
+                    // cases this is a watermark frame). We need this to make sure assets_path
+                    // is added to the internal assets paths
+                    $external = empty($attrib['src']);
+                    $content  = call_user_func($handler, $attrib);
                 }
                 else if ($object == 'doctype') {
                     $content = html::doctype($attrib['value']);
@@ -1166,21 +1325,27 @@ EOF;
                 else if ($object == 'logo') {
                     $attrib += array('alt' => $this->xml_command(array('', 'object', 'name="productname"')));
 
-                    if ($logo = $this->config->get('skin_logo')) {
-                        if (is_array($logo)) {
-                            if ($template_logo = $logo[$this->template_name]) {
-                                $attrib['src'] = $template_logo;
+                    if (!empty($attrib['type']) && ($template_logo = $this->get_template_logo(':' . $attrib['type'], true)) !== null) {
+                        $attrib['src'] = $template_logo;
+                    }
+                    else if (($template_logo = $this->get_template_logo()) !== null) {
+                        $attrib['src'] = $template_logo;
+                    }
+
+                    // process alternative logos (eg for Elastic small screen)
+                    foreach ($attrib as $key => $value) {
+                        if (preg_match('/data-src-(.*)/', $key, $matches)) {
+                            if (($template_logo = $this->get_template_logo(':' . $matches[1], true)) !== null) {
+                                $attrib[$key] = $template_logo;
                             }
-                            elseif ($template_logo = $logo['*']) {
-                                $attrib['src'] = $template_logo;
-                            }
-                        }
-                        else {
-                            $attrib['src'] = $logo;
+
+                            $attrib[$key] = !empty($attrib[$key]) ? $this->abs_url($attrib[$key]) : null;
                         }
                     }
 
-                    $content = html::img($attrib);
+                    if ($attrib['src']) {
+                        $content = html::img($attrib);
+                    }
                 }
                 else if ($object == 'productname') {
                     $name = $this->config->get('product_name', 'Roundcube Webmail');
@@ -1202,7 +1367,7 @@ EOF;
                     $content = html::quote($ver);
                 }
                 else if ($object == 'steptitle') {
-                  $content = html::quote($this->get_pagetitle());
+                    $content = html::quote($this->get_pagetitle());
                 }
                 else if ($object == 'pagetitle') {
                     if ($this->devel_mode && !empty($_SESSION['username']))
@@ -1213,6 +1378,64 @@ EOF;
                         $title = '';
                     $title .= $this->get_pagetitle();
                     $content = html::quote($title);
+                }
+                else if ($object == 'contentframe') {
+                    if (empty($attrib['id'])) {
+                        $attrib['id'] = 'rcm' . $this->env['task'] . 'frame';
+                    }
+
+                    // parse variables
+                    if (preg_match('/^(config|env):([a-z0-9_]+)$/i', $attrib['src'], $matches)) {
+                        $attrib['src'] = $this->parse_variable($matches[1], $matches[2]);
+                    }
+
+                    $content = $this->frame($attrib, true);
+                }
+                else if ($object == 'meta' || $object == 'links') {
+                    if ($object == 'meta') {
+                        $source = 'meta_tags';
+                        $tag    = 'meta';
+                        $key    = 'name';
+                        $param  = 'content';
+                    }
+                    else if ($object == 'links') {
+                        $source = 'link_tags';
+                        $tag    = 'link';
+                        $key    = 'rel';
+                        $param  = 'href';
+                    }
+
+                    foreach ($this->$source as $name => $vars) {
+                        // $vars can be in many forms:
+                        // - string
+                        // - array('key' => 'val')
+                        // - array(string, string)
+                        // - array(array(), string)
+                        // - array(array('key' => 'val'), array('key' => 'val'))
+                        // normalise this for processing by checking for string array keys
+                        $vars = is_array($vars) ? (count(array_filter(array_keys($vars), 'is_string')) > 0 ? array($vars) : $vars) : array($vars);
+
+                        foreach ($vars as $args) {
+                            // skip unset headers e.g. when extending a skin and removing a header defined in the parent
+                            if ($args === false) {
+                                continue;
+                            }
+
+                            $args = is_array($args) ? $args : array($param => $args);
+
+                            // special handling for favicon
+                            if ($object == 'links' && $name == 'shortcut icon' && empty($args[$param])) {
+                                if ($href = $this->get_template_logo(':favicon', true)) {
+                                    $args[$param] = $href;
+                                }
+                                else if ($href = $this->config->get('favicon', '/images/favicon.ico')) {
+                                    $args[$param] = $href;
+                                }
+                            }
+
+                            $content .= html::tag($tag, array($key => $name, 'nl' => true) + $args);
+                        }
+                    }
                 }
 
                 // exec plugin hooks for this template object
@@ -1226,6 +1449,17 @@ EOF;
 
                 return $hook['content'];
 
+            // return <link> element
+            case 'link':
+                if ($attrib['condition'] && !$this->check_condition($attrib['condition'])) {
+                    break;
+                }
+
+                unset($attrib['condition']);
+
+                return html::tag('link', $attrib);
+
+
             // return code for a specified eval expression
             case 'exp':
                 return html::quote($this->eval_expression($attrib['expression']));
@@ -1233,32 +1467,7 @@ EOF;
             // return variable
             case 'var':
                 $var = explode(':', $attrib['name']);
-                $name = $var[1];
-                $value = '';
-
-                switch ($var[0]) {
-                    case 'env':
-                        $value = $this->env[$name];
-                        break;
-                    case 'config':
-                        $value = $this->config->get($name);
-                        if (is_array($value) && $value[$_SESSION['storage_host']]) {
-                            $value = $value[$_SESSION['storage_host']];
-                        }
-                        break;
-                    case 'request':
-                        $value = rcube_utils::get_input_value($name, rcube_utils::INPUT_GPC);
-                        break;
-                    case 'session':
-                        $value = $_SESSION[$name];
-                        break;
-                    case 'cookie':
-                        $value = htmlspecialchars($_COOKIE[$name]);
-                        break;
-                    case 'browser':
-                        $value = $this->browser->{$name};
-                        break;
-                }
+                $value = $this->parse_variable($var[0], $var[1]);
 
                 if (is_array($value)) {
                     $value = implode(', ', $value);
@@ -1270,6 +1479,21 @@ EOF;
                 return $this->form_tag($attrib);
         }
         return '';
+    }
+
+    /**
+     * Prepares template object attributes
+     *
+     * @param array &$attribs Attributes
+     */
+    protected function prepare_object_attribs(&$attribs)
+    {
+        // Localize data-label-* attributes
+        array_walk($attribs, function(&$value, $key, $rcube) {
+            if (strpos($key, 'data-label-') === 0) {
+                $value = $rcube->gettext($value);
+            }
+        }, $this->app);
     }
 
     /**
@@ -1296,11 +1520,11 @@ EOF;
     {
         // insert objects' contents
         foreach ($this->objects as $key => $val) {
-            $output = str_replace($key, $val, $output);
+            $output = str_replace($key, $val, $output, $count);
+            if ($count) {
+                $this->objects[$key] = null;
+            }
         }
-
-        // reset objects
-        $this->objects = array();
 
         // make sure all <form> tags have a valid request token
         $output = preg_replace_callback('/<form\s+([^>]+)>/Ui', array($this, 'alter_form_tag'), $output);
@@ -1338,16 +1562,18 @@ EOF;
             }
         }
         else {
-            $attrib['type'] = ($attrib['image'] || $attrib['imagepas'] || $attrib['imageact']) ? 'image' : 'link';
+            $attrib['type'] = ($attrib['image'] || $attrib['imagepas'] || $attrib['imageact']) ? 'image' : 'button';
         }
 
         $command = $attrib['command'];
+        $action = $command ?: $attrib['name'];
 
         if ($attrib['task']) {
-            $element = $command = $attrib['task'] . '.' . $command;
+            $command = $attrib['task'] . '.' . $command;
+            $element = $attrib['task'] . '.' . $action;
         }
         else {
-            $element = ($this->env['task'] ? $this->env['task'] . '.' : '') . $command;
+            $element = ($this->env['task'] ? $this->env['task'] . '.' : '') . $action;
         }
 
         if ($disabled_actions === null) {
@@ -1355,7 +1581,7 @@ EOF;
         }
 
         // remove buttons for disabled actions
-        if (in_array($element, $disabled_actions)) {
+        if (in_array($element, $disabled_actions) || in_array($action, $disabled_actions)) {
             return '';
         }
 
@@ -1428,12 +1654,14 @@ EOF;
         }
 
         // overwrite attributes
-        if (!$attrib['href']) {
+        if (!$attrib['href'] && !$menuitem) {
             $attrib['href'] = '#';
         }
+
         if ($attrib['task']) {
-            if ($attrib['classact'])
+            if ($attrib['classact']) {
                 $attrib['class'] = $attrib['classact'];
+            }
         }
         else if ($command && !$attrib['onclick']) {
             $attrib['onclick'] = sprintf(
@@ -1463,9 +1691,10 @@ EOF;
         }
         else if ($attrib['type'] == 'link') {
             $btn_content = isset($attrib['content']) ? $attrib['content'] : ($attrib['label'] ? $attrib['label'] : $attrib['command']);
-            $link_attrib = array_merge(html::$common_attrib, array('href', 'onclick', 'tabindex', 'target'));
-            if ($attrib['innerclass'])
+            $link_attrib = array_merge(html::$common_attrib, array('href', 'onclick', 'tabindex', 'target', 'rel'));
+            if ($attrib['innerclass']) {
                 $btn_content = html::span($attrib['innerclass'], $btn_content);
+            }
         }
         else if ($attrib['type'] == 'input') {
             $attrib['type'] = 'button';
@@ -1474,10 +1703,21 @@ EOF;
                 $attrib['value'] = $attrib['label'];
             }
             if ($attrib['command']) {
-              $attrib['disabled'] = 'disabled';
+                $attrib['disabled'] = 'disabled';
             }
 
             $out = html::tag('input', $attrib, null, array('type', 'value', 'onclick', 'id', 'class', 'style', 'tabindex', 'disabled'));
+        }
+        else {
+            if ($attrib['label']) {
+                $attrib['value'] = $attrib['label'];
+            }
+            if ($attrib['command']) {
+                $attrib['disabled'] = 'disabled';
+            }
+
+            $content = isset($attrib['content']) ? $attrib['content'] : $attrib['label'];
+            $out = html::tag('button', $attrib, $content, array('type', 'value', 'onclick', 'id', 'class', 'style', 'tabindex', 'disabled'));
         }
 
         // generate html code for button
@@ -1502,11 +1742,11 @@ EOF;
      * Link an external script file
      *
      * @param string $file     File URL
-     * @param string $position Target position [head|foot]
+     * @param string $position Target position [head|head_bottom|foot]
      */
-    public function include_script($file, $position='head')
+    public function include_script($file, $position = 'head', $add_path = true)
     {
-        if (!preg_match('|^https?://|i', $file) && $file[0] != '/') {
+        if ($add_path && !preg_match('|^https?://|i', $file) && $file[0] != '/') {
             $file = $this->file_mod($this->scripts_path . $file);
         }
 
@@ -1523,9 +1763,9 @@ EOF;
      * Add inline javascript code
      *
      * @param string $script   JS code snippet
-     * @param string $position Target position [head|head_top|foot]
+     * @param string $position Target position [head|head_top|foot|docready]
      */
-    public function add_script($script, $position='head')
+    public function add_script($script, $position = 'head')
     {
         if (!isset($this->scripts[$position])) {
             $this->scripts[$position] = "\n" . rtrim($script);
@@ -1569,12 +1809,12 @@ EOF;
     /**
      * Process template and write to stdOut
      *
-     * @param string $templ     HTML template
+     * @param string $output    HTML output
      * @param string $base_path Base for absolute paths
      */
-    protected function _write($templ = '', $base_path = '')
+    protected function _write($output = '', $base_path = '')
     {
-        $output = trim($templ);
+        $output = trim($output);
 
         if (empty($output)) {
             $output   = html::doctype('html5') . "\n" . $this->default_template;
@@ -1595,6 +1835,19 @@ EOF;
             }
         }
 
+        $merge_script_files = function($output, $script) {
+            return $output . html::script($script);
+        };
+
+        $merge_scripts = function($output, $script) {
+            return $output . html::script(array(), $script);
+        };
+
+        // put docready commands into page footer
+        if (!empty($this->scripts['docready'])) {
+            $this->add_script('$(document).ready(function(){ ' . $this->scripts['docready'] . "\n});", 'foot');
+        }
+
         // replace specialchars in content
         $page_title  = html::quote($this->pagetitle);
         $page_header = '';
@@ -1610,40 +1863,15 @@ EOF;
             $page_header.= $this->charset . '" />'."\n";
         }
 
-        // definition of the code to be placed in the document header and footer
-        if (is_array($this->script_files['head'])) {
-            foreach ($this->script_files['head'] as $file) {
-                $page_header .= html::script($file);
-            }
-        }
+        // include scripts into header/footer
+        $page_header .= array_reduce((array) $this->script_files['head'], $merge_script_files);
+        $page_header .= array_reduce(array($this->scripts['head_top'] . $this->scripts['head']), $merge_scripts);
+        $page_header .= $this->header . "\n";
+        $page_header .= array_reduce((array) $this->script_files['head_bottom'], $merge_script_files);
 
-        $head_script = $this->scripts['head_top'] . $this->scripts['head'];
-        if (!empty($head_script)) {
-            $page_header .= html::script(array(), $head_script);
-        }
-
-        if (!empty($this->header)) {
-            $page_header .= $this->header;
-        }
-
-        // put docready commands into page footer
-        if (!empty($this->scripts['docready'])) {
-            $this->add_script('$(document).ready(function(){ ' . $this->scripts['docready'] . "\n});", 'foot');
-        }
-
-        if (is_array($this->script_files['foot'])) {
-            foreach ($this->script_files['foot'] as $file) {
-                $page_footer .= html::script($file);
-            }
-        }
-
-        if (!empty($this->footer)) {
-            $page_footer .= $this->footer . "\n";
-        }
-
-        if (!empty($this->scripts['foot'])) {
-            $page_footer .= html::script(array(), $this->scripts['foot']);
-        }
+        $page_footer .= array_reduce((array) $this->script_files['foot'], $merge_script_files);
+        $page_footer .= $this->footer . "\n";
+        $page_footer .= array_reduce((array) $this->scripts['foot'], $merge_scripts);
 
         // find page header
         if ($hpos = stripos($output, '</head>')) {
@@ -1672,6 +1900,15 @@ EOF;
 
         // add page footer
         if (($fpos = strripos($output, '</body>')) || ($fpos = strripos($output, '</html>'))) {
+            // for Elastic: put footer content before "footer scripts"
+            while (($npos = strripos($output, "\n", -strlen($output) + $fpos - 1))
+                && $npos != $fpos
+                && ($chunk = substr($output, $npos, $fpos - $npos)) !== ''
+                && (trim($chunk) === '' || preg_match('/\s*<script[^>]+><\/script>\s*/', $chunk))
+            ) {
+                $fpos = $npos;
+            }
+
             $output = substr_replace($output, $page_footer."\n", $fpos, 0);
         }
         else {
@@ -1684,8 +1921,13 @@ EOF;
         ) {
             $css = '';
             foreach ($this->css_files as $file) {
-                $css .= html::tag('link', array('rel' => 'stylesheet',
-                    'type' => 'text/css', 'href' => $file, 'nl' => true));
+                $is_less = substr_compare($file, '.less', -5, 5, true) === 0;
+                $css    .= html::tag('link', array(
+                        'rel'  => $is_less ? 'stylesheet/less' : 'stylesheet',
+                        'type' => 'text/css',
+                        'href' => $file,
+                        'nl'   => true,
+                ));
             }
             $output = substr_replace($output, $css, $pos, 0);
         }
@@ -1727,12 +1969,11 @@ EOF;
         }
 
         $attrib['name'] = $attrib['id'];
-        $attrib['src']  = $attrib['src'] ? $this->abs_url($attrib['src'], true) : 'program/resources/blank.gif';
+        $attrib['src']  = $attrib['src'] ? $this->abs_url($attrib['src'], true) : 'about:blank';
 
         // register as 'contentframe' object
         if ($is_contentframe || $attrib['contentframe']) {
             $this->set_env('contentframe', $attrib['contentframe'] ? $attrib['contentframe'] : $attrib['name']);
-            $this->set_env('blankpage', $this->asset_url($attrib['src']));
         }
 
         return html::iframe($attrib);
@@ -1928,9 +2169,8 @@ EOF;
         }
 
         if (rcube_utils::get_boolean($attrib['submit'])) {
-            $submit = new html_inputfield(array('type' => 'submit', 'id' => 'rcmloginsubmit',
-                'class' => 'button mainaction', 'value' => $this->app->gettext('login')));
-            $out .= html::p('formbuttons', $submit->show());
+            $button_attr = array('type' => 'submit', 'id' => 'rcmloginsubmit', 'class' => 'button mainaction submit');
+            $out .= html::p('formbuttons', html::tag('button', $button_attr, $this->app->gettext('login')));
         }
 
         // surround html output with a form tag
@@ -1976,12 +2216,13 @@ EOF;
      *
      * @return string HTML code for the gui object
      */
-    protected function search_form($attrib)
+    public function search_form($attrib)
     {
         // add some labels to client
         $this->add_label('searching');
 
-        $attrib['name'] = '_q';
+        $attrib['name']  = '_q';
+        $attrib['class'] = trim($attrib['class'] . ' no-bs');
 
         if (empty($attrib['id'])) {
             $attrib['id'] = 'rcmqsearchbox';
@@ -1989,19 +2230,72 @@ EOF;
         if ($attrib['type'] == 'search' && !$this->browser->khtml) {
             unset($attrib['type'], $attrib['results']);
         }
+        if (empty($attrib['placeholder'])) {
+            $attrib['placeholder'] = $this->app->gettext('searchplaceholder');
+        }
 
+        $label   = html::label(array('for' => $attrib['id'], 'class' => 'voice'), rcube::Q($this->app->gettext('arialabelsearchterms')));
         $input_q = new html_inputfield($attrib);
-        $out     = $input_q->show();
+        $out     = $label . $input_q->show();
 
-        $this->add_gui_object('qsearchbox', $attrib['id']);
+        // Support for multiple searchforms on the same page
+        if ($attrib['gui-object'] !== false && $attrib['gui-object'] !== 'false') {
+            $this->add_gui_object($attrib['gui-object'] ?: 'qsearchbox', $attrib['id']);
+        }
 
         // add form tag around text field
-        if (empty($attrib['form'])) {
+        if (empty($attrib['form']) && empty($attrib['no-form'])) {
             $out = $this->form_tag(array(
-                    'name'     => "rcmqsearchform",
-                    'onsubmit' => self::JS_OBJECT_NAME . ".command('search'); return false",
-                    'style'    => "display:inline"
+                    'name'     => $attrib['form-name'] ?: 'rcmqsearchform',
+                    'onsubmit' => sprintf("%s.command('%s'); return false", self::JS_OBJECT_NAME, $attrib['command'] ?: 'search'),
+                    // 'style'    => "display:inline"
                 ), $out);
+        }
+
+        if (!empty($attrib['wrapper'])) {
+            $header = html::tag($attrib['ariatag'] ?: 'h2', array(
+                    'id'    => 'aria-label-' . $attrib['label'],
+                    'class' => 'voice'
+                ), rcube::Q($this->app->gettext('arialabel' . $attrib['label'], $attrib['label-domain'])));
+
+            if ($attrib['options']) {
+                $options_button = $this->button(array(
+                        'type'       => 'link',
+                        'href'       => '#search-filter',
+                        'class'      => 'button options',
+                        'label'      => 'options',
+                        'title'      => 'options',
+                        'tabindex'   => '0',
+                        'innerclass' => 'inner',
+                        'data-target' => $attrib['options']
+                ));
+            }
+
+            $search_button = $this->button(array(
+                    'type'       => 'link',
+                    'href'       => '#search',
+                    'class'      => 'button search',
+                    'label'      => $attrib['buttontitle'],
+                    'title'      => $attrib['buttontitle'],
+                    'tabindex'   => '0',
+                    'innerclass' => 'inner',
+            ));
+
+            $reset_button = $this->button(array(
+                    'type'       => 'link',
+                    'command'    => $attrib['reset-command'] ?: 'reset-search',
+                    'class'      => 'button reset',
+                    'label'      => 'resetsearch',
+                    'title'      => 'resetsearch',
+                    'tabindex'   => '0',
+                    'innerclass' => 'inner',
+            ));
+
+            $out = html::div(array(
+                    'role'            => 'search',
+                    'aria-labelledby' => $attrib['label'] ? 'aria-label-' . $attrib['label'] : null,
+                    'class'           => $attrib['wrapper'],
+                ), "$header$out\n$reset_button\n$options_button\n$search_button");
         }
 
         return $out;
@@ -2077,8 +2371,8 @@ EOF;
             'GB2312'       => 'GB2312 ('.$this->app->gettext('chinese').')',
         );
 
-        if (!empty($_POST['_charset'])) {
-            $set = $_POST['_charset'];
+        if ($post = rcube_utils::get_input_value('_charset', rcube_utils::INPUT_POST)) {
+            $set = $post;
         }
         else if (!empty($attrib['selected'])) {
             $set = $attrib['selected'];
@@ -2088,7 +2382,7 @@ EOF;
         }
 
         $set = strtoupper($set);
-        if (!isset($charsets[$set])) {
+        if (!isset($charsets[$set]) && preg_match('/^[A-Z0-9-]+$/', $set)) {
             $charsets[$set] = $set;
         }
 
@@ -2120,5 +2414,52 @@ EOF;
         }
 
         return $content;
+    }
+
+    /**
+     * Get logo URL for current template based on skin_logo config option
+     *
+     * @param string  $name     Name of the logo to check for
+     *                          default is current template
+     * @param boolean $strict   True if logo should only be returned for specific template
+     *
+     * @return string image URL
+     */
+    protected function get_template_logo($name = null, $strict = false)
+    {
+        $template_logo = null;
+
+        // Use current template if none provided
+        if (!$name) {
+            $name = $this->template_name;
+        }
+
+        $template_names = array(
+            $this->skin_name . ':' . $name,
+            $this->skin_name . ':*',
+            $name,
+            '*',
+        );
+
+        // If strict matching then remove wildcard options
+        if ($strict) {
+            $template_names = preg_grep("/\*$/", $template_names, PREG_GREP_INVERT);
+        }
+
+        if ($logo = $this->config->get('skin_logo')) {
+            if (is_array($logo)) {
+                foreach ($template_names as $key) {
+                    if (isset($logo[$key])) {
+                        $template_logo = $logo[$key];
+                        break;
+                    }
+                }
+            }
+            else {
+                $template_logo = $logo;
+            }
+        }
+
+        return $template_logo;
     }
 }

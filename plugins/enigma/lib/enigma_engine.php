@@ -29,6 +29,7 @@ class enigma_engine
     private $pgp_driver;
     private $smime_driver;
     private $password_time;
+    private $cache = array();
 
     public $decryptions     = array();
     public $signatures      = array();
@@ -164,11 +165,7 @@ class enigma_engine
         case self::SIGN_MODE_MIME:
             $pgp_mode = Crypt_GPG::SIGN_MODE_DETACHED;
             break;
-/*
-        case self::SIGN_MODE_SEPARATE:
-            $pgp_mode = Crypt_GPG::SIGN_MODE_NORMAL;
-            break;
-*/
+
         default:
             if ($mime->isMultipart()) {
                 $pgp_mode = Crypt_GPG::SIGN_MODE_DETACHED;
@@ -220,7 +217,7 @@ class enigma_engine
             $message->setParam('text_charset', $text_charset);
         }
         else {
-            $mime->addPGPSignature($body);
+            $mime->addPGPSignature($body, $this->pgp_driver->signature_algorithm());
             $message = $mime;
         }
     }
@@ -352,7 +349,7 @@ class enigma_engine
         $from    = $from[1];
 
         // find my key
-        if ($from && ($key = $this->find_key($from))) {
+        if ($from && ($key = $this->find_key($from, true))) {
             $pubkey_armor = $this->export_key($key->id);
 
             if (!$pubkey_armor instanceof enigma_error) {
@@ -376,6 +373,9 @@ class enigma_engine
      */
     function part_structure($p, $body = null)
     {
+        // Don't be tempted to support encryption in text/html parts
+        // Because of EFAIL vulnerability we should never support this (#6289)
+
         if ($p['mimetype'] == 'text/plain' || $p['mimetype'] == 'application/pgp') {
             $this->parse_plain($p, $body);
         }
@@ -429,11 +429,6 @@ class enigma_engine
     function parse_plain(&$p, $body = null)
     {
         $part = $p['structure'];
-
-        // exit, if we're already inside a decrypted message
-        if (in_array($part->mime_id, $this->encrypted_parts)) {
-            return;
-        }
 
         // Get message body from IMAP server
         if ($body === null) {
@@ -988,6 +983,10 @@ class enigma_engine
      */
     function find_key($email, $can_sign = false)
     {
+        if ($can_sign && array_key_exists($email, $this->cache)) {
+            return $this->cache[$email];
+        }
+
         $this->load_pgp_driver();
         $result = $this->pgp_driver->list_keys($email);
 
@@ -997,13 +996,25 @@ class enigma_engine
         }
 
         $mode = $can_sign ? enigma_key::CAN_SIGN : enigma_key::CAN_ENCRYPT;
+        $ret  = null;
 
         // check key validity and type
         foreach ($result as $key) {
-            if ($subkey = $key->find_subkey($email, $mode)) {
-                return $key;
+            if (($subkey = $key->find_subkey($email, $mode))
+                && (!$can_sign || $key->get_type() == enigma_key::TYPE_KEYPAIR)
+            ) {
+                $ret = $key;
+                break;
             }
         }
+
+        // cache private key info for better performance
+        // we can skip one list_keys() call when signing and attaching a key
+        if ($can_sign) {
+            $this->cache[$email] = $ret;
+        }
+
+        return $ret;
     }
 
     /**
@@ -1205,6 +1216,11 @@ class enigma_engine
         }
         else {
             $body = $msg->get_part_body($part->mime_id, false);
+
+            // Convert charset to get rid of possible non-ascii characters (#5962)
+            if ($part->charset && stripos($part->charset, 'ASCII') === false) {
+                $body = rcube_charset::convert($body, $part->charset, 'US-ASCII');
+            }
         }
 
         return $body;

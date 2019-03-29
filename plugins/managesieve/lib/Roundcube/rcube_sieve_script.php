@@ -1,7 +1,7 @@
 <?php
 
 /**
- *  Class for operations on Sieve scripts
+ * Class for operations on Sieve scripts
  *
  * Copyright (C) 2008-2011, The Roundcube Dev Team
  * Copyright (C) 2011, Kolab Systems AG
@@ -31,6 +31,7 @@ class rcube_sieve_script
         'copy',                     // RFC3894
         'date',                     // RFC5260
         'duplicate',                // RFC7352
+        'editheader',               // RFC5293
         'enotify',                  // RFC5435
         'envelope',                 // RFC5228
         'ereject',                  // RFC5429
@@ -39,6 +40,7 @@ class rcube_sieve_script
         'imap4flags',               // RFC5232
         'include',                  // RFC6609
         'index',                    // RFC5260
+        'mime',                     // RFC5703 (except: foreverypart/break, enclose, extracttext)
         'notify',                   // RFC5435
         'regex',                    // draft-ietf-sieve-regex-01
         'reject',                   // RFC5429
@@ -85,21 +87,22 @@ class rcube_sieve_script
     {
         // TODO: check this->supported
         array_push($this->content, $content);
-        return sizeof($this->content)-1;
+        return count($this->content) - 1;
     }
 
     public function delete_rule($index)
     {
-        if(isset($this->content[$index])) {
+        if (isset($this->content[$index])) {
             unset($this->content[$index]);
             return true;
         }
+
         return false;
     }
 
     public function size()
     {
-        return sizeof($this->content);
+        return count($this->content);
     }
 
     public function update_rule($index, $content)
@@ -109,6 +112,7 @@ class rcube_sieve_script
             $this->content[$index] = $content;
             return $index;
         }
+
         return false;
     }
 
@@ -233,8 +237,11 @@ class rcube_sieve_script
                         break;
 
                     case 'exists':
-                        $tests[$i] .= ($test['not'] ? 'not ' : '');
-                        $tests[$i] .= 'exists ' . self::escape_string($test['arg']);
+                        $tests[$i] .= ($test['not'] ? 'not ' : '') . 'exists';
+
+                        $this->add_mime($test, $tests[$i], $exts);
+
+                        $tests[$i] .= ' ' . self::escape_string($test['arg']);
                         break;
 
                     case 'header':
@@ -242,9 +249,13 @@ class rcube_sieve_script
                         if ($test['test'] == 'string') {
                             array_push($exts, 'variables');
                         }
-                        
+
                         $tests[$i] .= ($test['not'] ? 'not ' : '');
                         $tests[$i] .= $test['test'];
+
+                        if ($test['test'] == 'header') {
+                            $this->add_mime($test, $tests[$i], $exts);
+                        }
 
                         $this->add_index($test, $tests[$i], $exts);
                         $this->add_operator($test, $tests[$i], $exts);
@@ -262,7 +273,8 @@ class rcube_sieve_script
                         $tests[$i] .= ($test['not'] ? 'not ' : '');
                         $tests[$i] .= $test['test'];
 
-                        if ($test['test'] != 'envelope') {
+                        if ($test['test'] == 'address') {
+                            $this->add_mime($test, $tests[$i], $exts);
                             $this->add_index($test, $tests[$i], $exts);
                         }
 
@@ -411,6 +423,26 @@ class rcube_sieve_script
                             . self::escape_string($action['target']);
                         break;
 
+                    case 'addheader':
+                    case 'deleteheader':
+                        array_push($exts, 'editheader');
+                        $action_script .= $action['type'];
+                        if (!empty($action['index'])) {
+                            $action_script .= " :index " . intval($action['index']);
+                        }
+                        if (!empty($action['last']) && (!empty($action['index']) || $action['type'] == 'addheader')) {
+                            $action_script .= " :last";
+                        }
+                        if ($action['type'] == 'deleteheader') {
+                            $action['type'] = $action['match-type'];
+                            $this->add_operator($action, $action_script, $exts);
+                        }
+                        $action_script .= " " . self::escape_string($action['name']);
+                        if ((is_string($action['value']) && strlen($action['value']) > 0) || (is_array($action['value']) && !empty($action['value']))) {
+                            $action_script .= " " . self::escape_string($action['value']);
+                        }
+                        break;
+
                     case 'keep':
                     case 'discard':
                     case 'stop':
@@ -433,6 +465,21 @@ class rcube_sieve_script
                             $action_script .= ":$opt ";
                         }
                         $action_script .= self::escape_string($action['name']) . ' ' . self::escape_string($action['value']);
+                        break;
+
+                    case 'replace':
+                        array_push($exts, 'mime');
+                        $action_script .= 'replace';
+                        if (!empty($action['mime'])) {
+                            $action_script .= " :mime";
+                        }
+                        if (!empty($action['subject'])) {
+                            $action_script .= " :subject " . self::escape_string($action['subject']);
+                        }
+                        if (!empty($action['from'])) {
+                            $action_script .= " :from " . self::escape_string($action['from']);
+                        }
+                        $action_script .= ' ' . self::escape_string($action['replace']);
                         break;
 
                     case 'notify':
@@ -590,7 +637,8 @@ class rcube_sieve_script
                     $prefix .= $line . "\n";
                 }
 
-                $position = $endl + 1;
+                // skip empty lines after the comment (#5657)
+                $position = self::ltrim_position($script, $endl + 1);
             }
 
             // handle script header
@@ -796,8 +844,9 @@ class rcube_sieve_script
                 break;
 
             case 'exists':
-                $tests[] = array('test' => 'exists', 'not' => $not,
-                    'arg'  => array_pop($tokens));
+                $test = array('test' => 'exists', 'not' => $not, 'arg'  => array_pop($tokens));
+                $test += $this->test_tokens($tokens);
+                $tests[] = $test;
                 break;
 
             case 'true':
@@ -851,6 +900,11 @@ class rcube_sieve_script
             $token     = !empty($tokens) ? array_shift($tokens) : $separator;
 
             switch ($token) {
+            case 'if':
+                // nested 'if' conditions, ignore the whole rule (#5540)
+                $this->_parse_actions($content, $position);
+                continue 2;
+
             case 'discard':
             case 'keep':
             case 'stop':
@@ -875,6 +929,21 @@ class rcube_sieve_script
                 $result[] = $action;
                 break;
 
+            case 'addheader':
+            case 'deleteheader':
+                $args = $this->test_tokens($tokens);
+                if ($token == 'deleteheader') {
+                    $args['match-type'] = $args['type'];
+                }
+                if (($index = array_search(':last', $tokens)) !== false) {
+                    $args['last'] = true;
+                    unset($tokens[$index]);
+                }
+                $action = array('type' => $token, 'name' => array_shift($tokens), 'value' => array_shift($tokens));
+
+                $result[] = $action + $args;
+                break;
+
             case 'reject':
             case 'ereject':
             case 'setflag':
@@ -895,6 +964,15 @@ class rcube_sieve_script
                 $action  = array('type' => 'set', 'value' => array_pop($tokens), 'name' => array_pop($tokens));
                 $args    = array('lower', 'upper', 'lowerfirst', 'upperfirst', 'quotewildcard', 'length');
                 $action += $this->action_arguments($tokens, $args);
+
+                $result[] = $action;
+                break;
+
+            case 'replace':
+                $action  = array('type' => 'replace', 'replace' => array_pop($tokens));
+                $args    = array('mime');
+                $vargs   = array('subject', 'from');
+                $action += $this->action_arguments($tokens, $args, $vargs);
 
                 $result[] = $action;
                 break;
@@ -936,8 +1014,9 @@ class rcube_sieve_script
                 break;
             }
 
-            if ($separator == $end)
+            if ($separator == $end) {
                 break;
+            }
         }
 
         return $result;
@@ -978,6 +1057,31 @@ class rcube_sieve_script
     }
 
     /**
+     * Add mime argument(s) to the test
+     */
+    private function add_mime($test, &$out, &$exts)
+    {
+        foreach (array('mime', 'mime-anychild', 'mime-type', 'mime-subtype', 'mime-contenttype', 'mime-param') as $opt) {
+            if (!empty($test[$opt])) {
+                $opt_name = str_replace('mime-', '', $opt);
+                if (!$got_mime) {
+                    $out .= ' :mime';
+                    $got_mime = true;
+                    array_push($exts, 'mime');
+                }
+
+                if ($opt_name != 'mime') {
+                    $out .= " :$opt_name";
+                }
+
+                if ($opt_name == 'param') {
+                    $out .= ' ' . self::escape_string($test[$opt]);
+                }
+            }
+        }
+    }
+
+    /**
      * Add operators to the test
      */
     private function add_operator($test, &$out, &$exts)
@@ -1012,25 +1116,31 @@ class rcube_sieve_script
         $result = array();
 
         for ($i=0, $len=count($tokens); $i<$len; $i++) {
-            if (!is_array($tokens[$i]) && preg_match('/^:comparator$/i', $tokens[$i])) {
+            $token = is_array($tokens[$i]) ? null : $tokens[$i];
+            if ($token && preg_match('/^:comparator$/i', $token)) {
                 $test['comparator'] = $tokens[++$i];
             }
-            else if (!is_array($tokens[$i]) && preg_match('/^:(count|value)$/i', $tokens[$i])) {
-                $test['type'] = strtolower(substr($tokens[$i], 1)) . '-' . $tokens[++$i];
+            else if ($token && preg_match('/^:(count|value)$/i', $token)) {
+                $test['type'] = strtolower(substr($token, 1)) . '-' . $tokens[++$i];
             }
-            else if (!is_array($tokens[$i]) && preg_match('/^:(is|contains|matches|regex)$/i', $tokens[$i])) {
-                $test['type'] = strtolower(substr($tokens[$i], 1));
+            else if ($token && preg_match('/^:(is|contains|matches|regex)$/i', $token)) {
+                $test['type'] = strtolower(substr($token, 1));
             }
-            else if (!is_array($tokens[$i]) && preg_match('/^:index$/i', $tokens[$i])) {
+            else if ($token && preg_match('/^:(mime|anychild|type|subtype|contenttype|param)$/i', $token)) {
+                $token = strtolower(substr($token, 1));
+                $key   = $token == 'mime' ? $token : "mime-$token";
+                $test[$key] = $token == 'param' ? $tokens[++$i] : true;
+            }
+            else if ($token && preg_match('/^:index$/i', $token)) {
                 $test['index'] = intval($tokens[++$i]);
                 if ($tokens[$i+1] && preg_match('/^:last$/i', $tokens[$i+1])) {
                     $test['last'] = true;
                     $i++;
                 }
-           }
-           else {
-               $result[] = $tokens[$i];
-           }
+            }
+            else {
+                $result[] = $tokens[$i];
+            }
         }
 
         $tokens = $result;
@@ -1081,8 +1191,9 @@ class rcube_sieve_script
     static function escape_string($str)
     {
         if (is_array($str) && count($str) > 1) {
-            foreach($str as $idx => $val)
+            foreach ($str as $idx => $val) {
                 $str[$idx] = self::escape_string($val);
+            }
 
             return '[' . implode(',', $str) . ']';
         }
@@ -1091,7 +1202,7 @@ class rcube_sieve_script
         }
 
         // multi-line string
-        if (preg_match('/[\r\n\0]/', $str) || strlen($str) > 1024) {
+        if (preg_match('/[\r\n\0]/', $str)) {
             return sprintf("text:\n%s\n.\n", self::escape_multiline_string($str));
         }
         // quoted-string
@@ -1252,7 +1363,7 @@ class rcube_sieve_script
                         if ($str[$position] == "\n") {
                             $position++;
                         }
-                        else if ($str[$position] == "\r" && $str[$position] == "\n") {
+                        else if ($str[$position] == "\r" && $str[$position + 1] == "\n") {
                             $position += 2;
                         }
 
@@ -1268,11 +1379,16 @@ class rcube_sieve_script
                             $text    .= substr($str, $position, $pos - $position);
                             $position = $pos + 2;
 
-                            if ($str[$pos] == "\n"
-                                || ($str[$pos] == "\r" && $str[$pos + 1] == "\n")
-                            ) {
+                            if ($str[$position] == "\n") {
                                 break;
                             }
+
+                            if ($str[$position] == "\r" && $str[$position + 1] == "\n") {
+                                $position++;
+                                break;
+                            }
+
+                            $text .= "\n.";
                         }
 
                         // remove dot-stuffing

@@ -11,7 +11,6 @@ $RCI->bool_config_props = array(
   'auto_create_user' => 1,
   'smtp_log' => 1,
   'prefer_html' => 1,
-  'debug_level' => 1,
 );
 
 // allow the current user to get to the next step
@@ -196,31 +195,16 @@ echo $input_ilevel->show($RCI->getprop('identities_level'), 0);
 <legend>Logging & Debugging</legend>
 <dl class="loggingblock">
 
-<dt class="propname">debug_level</dt>
-<dd>
-<?php
-
-$value = $RCI->getprop('debug_level');
-$check_debug = new html_checkbox(array('name' => '_debug_level[]'));
-echo $check_debug->show(($value & 1) ? 1 : 0 , array('value' => 1, 'id' => 'cfgdebug1'));
-echo '<label for="cfgdebug1">Log errors</label><br />';
-
-echo $check_debug->show(($value & 4) ? 4 : 0, array('value' => 4, 'id' => 'cfgdebug4'));
-echo '<label for="cfgdebug4">Print errors (to the browser)</label><br />';
-
-?>
-</dd>
-
 <dt class="propname">log_driver</dt>
 <dd>
 <?php
 
 $select_log_driver = new html_select(array('name' => '_log_driver', 'id' => "cfglogdriver"));
-$select_log_driver->add(array('file', 'syslog'), array('file', 'syslog'));
+$select_log_driver->add(array('file', 'syslog', 'stdout'), array('file', 'syslog', 'stdout'));
 echo $select_log_driver->show($RCI->getprop('log_driver', 'file'));
 
 ?>
-<div>How to do logging? 'file' - write to files in the log directory, 'syslog' - use the syslog facility.</div>
+<div>How to do logging? 'file' - write to files in the log directory, 'syslog' - use the syslog facility, 'stdout' writes to the process' STDOUT file descriptor.</div>
 </dd>
 
 <dt class="propname">log_dir</dt>
@@ -476,7 +460,7 @@ $text_smtpport = new html_inputfield(array('name' => '_smtp_port', 'size' => 6, 
 echo $text_smtpport->show($RCI->getprop('smtp_port'));
 
 ?>
-<div>SMTP port (default is 25; 465 for SSL; 587 for submission)</div>
+<div>SMTP port (default is 587)</div>
 </dd>
 
 <dt class="propname">smtp_user/smtp_pass</dt>
@@ -673,8 +657,7 @@ echo $select_param_folding->show(strval($RCI->getprop('mime_param_folding')));
 
 <?php
 $plugins = $RCI->list_plugins();
-foreach($plugins as $p) 
-{
+foreach ($plugins as $p) {
     $p_check = new html_checkbox(array('name' => '_plugins_'.$p['name'], 'id' => 'cfgplugin_'.$p['name'], 'value' => $p['name']));
     echo '<dt class="propname"><label>';
     echo $p_check->show($p['enabled'] ? $p['name'] : 0);

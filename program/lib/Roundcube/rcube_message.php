@@ -28,7 +28,7 @@
 class rcube_message
 {
     /**
-     * Instace of framework class.
+     * Instance of framework class.
      *
      * @var rcube
      */
@@ -125,7 +125,8 @@ class rcube_message
 
         $this->mime    = new rcube_mime($this->headers->charset);
         $this->subject = $this->headers->get('subject');
-        list(, $this->sender) = each($this->mime->decode_address_list($this->headers->from, 1));
+        $from          = $this->mime->decode_address_list($this->headers->from, 1);
+        $this->sender  = current($from);
 
         // notify plugins and let them analyze this structured message object
         $this->app->plugins->exec_hook('message_load', array('object' => $this));
@@ -250,7 +251,7 @@ class rcube_message
             if (is_resource($mode)) {
                 if ($body !== false) {
                     fwrite($mode, $body);
-                    rewind($mode);
+                    @rewind($mode);
                 }
 
                 return $body !== false;
@@ -275,7 +276,7 @@ class rcube_message
             !($mode && $formatted), $max_bytes, $mode && $formatted);
 
         if (is_resource($mode)) {
-            rewind($mode);
+            @rewind($mode);
             return $body !== false;
         }
 
@@ -678,8 +679,9 @@ class rcube_message
                 $this->parse_alternative = false;
 
                 // if plain part was found, we should unset it if html is preferred
-                if ($this->opt['prefer_html'] && count($this->parts))
+                if ($this->opt['prefer_html'] && count($this->parts)) {
                     $plain_part = null;
+                }
             }
 
             // choose html/plain part to print
@@ -696,7 +698,15 @@ class rcube_message
             // add the right message body
             if (is_object($print_part)) {
                 $print_part->type = 'content';
-                $this->add_part($print_part);
+
+                // Allow plugins to handle also this part
+                $plugin = $this->app->plugins->exec_hook('message_part_structure',
+                    array('object' => $this, 'structure' => $print_part,
+                        'mimetype' => $print_part->mimetype, 'recursive' => true));
+
+                if (!$plugin['abort']) {
+                    $this->add_part($print_part);
+                }
             }
             // show plaintext warning
             else if ($html_part !== null && empty($this->parts)) {
@@ -759,12 +769,12 @@ class rcube_message
 
                 // multipart/alternative or message/rfc822
                 if ($primary_type == 'multipart' || $part_mimetype == 'message/rfc822') {
-                    $this->parse_structure($mail_part, true);
-
-                    // list message/rfc822 as attachment as well (mostly .eml)
-                    if ($primary_type == 'message' && !empty($mail_part->filename)) {
+                    // list message/rfc822 as attachment as well
+                    if ($part_mimetype == 'message/rfc822') {
                         $this->add_part($mail_part, 'attachment');
                     }
+
+                    $this->parse_structure($mail_part, true);
                 }
                 // part text/[plain|html] or delivery status
                 else if ((($part_mimetype == 'text/plain' || $part_mimetype == 'text/html') && $mail_part->disposition != 'attachment') ||
@@ -825,31 +835,35 @@ class rcube_message
                         (empty($mail_part->disposition) || preg_match('/^[a-z0-9!#$&.+^_-]+$/i', $mail_part->disposition)))
                 ) {
                     // skip apple resource forks
-                    if ($message_ctype_secondary == 'appledouble' && $secondary_type == 'applefile')
+                    if ($message_ctype_secondary == 'appledouble' && $secondary_type == 'applefile') {
                         continue;
+                    }
+
+                    if ($mail_part->headers['content-id']) {
+                        $mail_part->content_id = preg_replace(array('/^</', '/>$/'), '', $mail_part->headers['content-id']);
+                    }
+
+                    if ($mail_part->headers['content-location']) {
+                        $mail_part->content_location = $mail_part->headers['content-base'] . $mail_part->headers['content-location'];
+                    }
 
                     // part belongs to a related message and is linked
-                    if (preg_match('/^multipart\/(related|relative)/', $mimetype)
-                        && ($mail_part->headers['content-id'] || $mail_part->headers['content-location'])
+                    // Note: mixed is not supposed to contain inline images, but we've found such examples (#5905)
+                    if (preg_match('/^multipart\/(related|relative|mixed)/', $mimetype)
+                        && ($mail_part->content_id || $mail_part->content_location)
                     ) {
-                        if ($mail_part->headers['content-id'])
-                            $mail_part->content_id = preg_replace(array('/^</', '/>$/'), '', $mail_part->headers['content-id']);
-                        if ($mail_part->headers['content-location'])
-                            $mail_part->content_location = $mail_part->headers['content-base'] . $mail_part->headers['content-location'];
-
                         $this->add_part($mail_part, 'inline');
                     }
-                    // regular attachment with valid content type
-                    // (content-type name regexp according to RFC4288.4.2)
-                    else if (preg_match('/^[a-z0-9!#$&.+^_-]+\/[a-z0-9!#$&.+^_-]+$/i', $part_mimetype)) {
-                        $this->add_part($mail_part, 'attachment');
-                    }
-                    // attachment with invalid content type
-                    // replace malformed content type with application/octet-stream (#1487767)
-                    else if ($mail_part->filename) {
-                        $mail_part->ctype_primary   = 'application';
-                        $mail_part->ctype_secondary = 'octet-stream';
-                        $mail_part->mimetype        = 'application/octet-stream';
+
+                    // Any non-inline attachment
+                    if (!preg_match('/^inline/i', $mail_part->disposition) || empty($mail_part->headers['content-id'])) {
+                        // Content-Type name regexp according to RFC4288.4.2
+                        if (!preg_match('/^[a-z0-9!#$&.+^_-]+\/[a-z0-9!#$&.+^_-]+$/i', $part_mimetype)) {
+                            // replace malformed content type with application/octet-stream (#1487767)
+                            $mail_part->ctype_primary   = 'application';
+                            $mail_part->ctype_secondary = 'octet-stream';
+                            $mail_part->mimetype        = 'application/octet-stream';
+                        }
 
                         $this->add_part($mail_part, 'attachment');
                     }
@@ -864,15 +878,17 @@ class rcube_message
                 }
             }
 
-            // if this was a related part try to resolve references
-            if (preg_match('/^multipart\/(related|relative)/', $mimetype) && sizeof($this->inline_parts)) {
+            // if this is a related part try to resolve references
+            // Note: mixed is not supposed to contain inline images, but we've found such examples (#5905)
+            if (preg_match('/^multipart\/(related|relative|mixed)/', $mimetype) && count($this->inline_parts)) {
                 $a_replaces = array();
                 $img_regexp = '/^image\/(gif|jpe?g|png|tiff|bmp|svg)/';
 
                 foreach ($this->inline_parts as $inline_object) {
                     $part_url = $this->get_part_url($inline_object->mime_id, $inline_object->ctype_primary);
-                    if (isset($inline_object->content_id))
+                    if (isset($inline_object->content_id)) {
                         $a_replaces['cid:'.$inline_object->content_id] = $part_url;
+                    }
                     if ($inline_object->content_location) {
                         $a_replaces[$inline_object->content_location] = $part_url;
                     }
@@ -899,8 +915,9 @@ class rcube_message
                 // add replace array to each content part
                 // (will be applied later when part body is available)
                 foreach ($this->parts as $i => $part) {
-                    if ($part->type == 'content')
+                    if ($part->type == 'content') {
                         $this->parts[$i]->replaces = $a_replaces;
+                    }
                 }
             }
         }
@@ -931,9 +948,11 @@ class rcube_message
     private function add_part($part, $type = null)
     {
         if ($this->check_context($part)) {
+            // It may happen that we add the same part to the array many times
+            // use part ID index to prevent from duplicates
             switch ($type) {
-                case 'inline': $this->inline_parts[] = $part; break;
-                case 'attachment': $this->attachments[] = $part; break;
+                case 'inline': $this->inline_parts[(string) $part->mime_id] = $part; break;
+                case 'attachment': $this->attachments[(string) $part->mime_id] = $part; break;
                 default: $this->parts[] = $part; break;
             }
         }
@@ -963,7 +982,7 @@ class rcube_message
 
         unset($body);
 
-        foreach ($tnef_arr as $pid => $winatt) {
+        foreach ($tnef_arr['attachments'] as $pid => $winatt) {
             $tpart = new rcube_message_part;
 
             $tpart->filename        = $this->fix_attachment_name(trim($winatt['name']), $part);

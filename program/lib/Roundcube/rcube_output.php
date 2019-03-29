@@ -55,8 +55,6 @@ abstract class rcube_output
             case 'skins':   return $this->skins;
             case 'charset': return $this->charset;
         }
-
-        return null;
     }
 
     /**
@@ -175,25 +173,94 @@ abstract class rcube_output
     }
 
     /**
-     * Send browser compatibility/security/etc. headers
+     * Send browser compatibility/security/privacy headers
+     *
+     * @param bool $privacy Enable privacy headers
      */
-    public function common_headers()
+    public function common_headers($privacy = true)
     {
         if (headers_sent()) {
             return;
         }
 
+        $headers = array();
+
         // Unlock IE compatibility mode
         if ($this->browser->ie) {
-            header('X-UA-Compatible: IE=edge');
+            $headers['X-UA-Compatible'] = 'IE=edge';
         }
 
-        // Request browser to disable DNS prefetching (CVE-2010-0464)
-        header("X-DNS-Prefetch-Control: off");
+        if ($privacy) {
+            // Request browser to disable DNS prefetching (CVE-2010-0464)
+            $headers['X-DNS-Prefetch-Control'] = 'off';
+
+            // Request browser disable Referer (sic) header
+            $headers['Referrer-Policy'] = 'same-origin';
+        }
 
         // send CSRF and clickjacking protection headers
         if ($xframe = $this->app->config->get('x_frame_options', 'sameorigin')) {
-            header('X-Frame-Options: ' . $xframe);
+            $headers['X-Frame-Options'] = $xframe;
+        }
+
+        $plugin = $this->app->plugins->exec_hook('common_headers', array('headers' => $headers, 'privacy' => $privacy));
+
+        foreach ($plugin['headers'] as $header => $value) {
+            header("$header: $value");
+        }
+    }
+
+    /**
+     * Send headers related to file downloads
+     *
+     * @param string $filename File name
+     * @param array  $params   Optional parameters:
+     *                         type         - File content type (default: 'application/octet-stream')
+     *                         disposition  - Download type: 'inline' or 'attachment' (default)
+     *                         length       - Content length
+     *                         charset      - File name character set
+     *                         type_charset - Content character set
+     *                         time_limit   - Script execution limit (default: 3600)
+     */
+    public function download_headers($filename, $params = array())
+    {
+        if (empty($params['disposition'])) {
+            $params['disposition'] = 'attachment';
+        }
+
+        if ($params['disposition'] == 'inline' && stripos($params['type'], 'text') === 0) {
+            $params['type'] .= '; charset=' . ($params['type_charset'] ?: $this->charset);
+        }
+
+        header("Content-Type: " . ($params['type'] ?: "application/octet-stream"));
+
+        if ($params['disposition'] == 'attachment' && $this->browser->ie) {
+            header("Content-Type: application/force-download");
+        }
+
+        $disposition = "Content-Disposition: " . $params['disposition'];
+
+        // For non-ascii characters we'll use RFC2231 syntax
+        if (!preg_match('/[^a-zA-Z0-9_.:,?;@+ -]/', $filename)) {
+            $disposition .= sprintf("; filename=\"%s\"", $filename);
+        }
+        else {
+            $disposition .= sprintf("; filename*=%s''%s", $params['charset'] ?: $this->charset, rawurlencode($filename));
+        }
+
+        header($disposition);
+
+        if (isset($params['length'])) {
+            header("Content-Length: " . $params['length']);
+        }
+
+        // don't kill the connection if download takes more than 30 sec.
+        if (!array_key_exists('time_limit', $params)) {
+            $params['time_limit'] = 3600;
+        }
+
+        if (is_numeric($params['time_limit'])) {
+            @set_time_limit($params['time_limit']);
         }
     }
 
@@ -206,7 +273,7 @@ abstract class rcube_output
     public function raise_error($code, $message)
     {
         // STUB: to be overloaded by specific output classes
-        fputs(STDERR, "Error $code: $message\n");
+        fwrite(STDERR, "Error $code: $message\n");
         exit(-1);
     }
 
@@ -267,13 +334,27 @@ abstract class rcube_output
      *
      * @param mixed   $input  Input value
      * @param boolean $pretty Enable JSON formatting
+     * @param boolean $inline Enable inline mode (generates output safe for use inside HTML)
      *
      * @return string Serialized JSON string
      */
-    public static function json_serialize($input, $pretty = false)
+    public static function json_serialize($input, $pretty = false, $inline = true)
     {
+        // The input need to be valid UTF-8 to use with json_encode()
         $input   = rcube_charset::clean($input);
-        $options = 0;
+        $options = JSON_UNESCAPED_SLASHES;
+
+        // JSON_HEX_TAG is needed for inlining JSON inside of the <script> tag
+        // if input contains a html tag it will cause issues (#6207)
+        if ($inline) {
+            $options |= JSON_HEX_TAG;
+        }
+
+        // JSON_UNESCAPED_UNICODE in PHP < 7.1.0 does not escape U+2028 and U+2029
+        // which causes issues (#6187)
+        if (PHP_VERSION_ID >= 70100) {
+            $options |= JSON_UNESCAPED_UNICODE;
+        }
 
         if ($pretty) {
             $options |= JSON_PRETTY_PRINT;

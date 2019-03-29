@@ -19,11 +19,6 @@
  +-----------------------------------------------------------------------+
 */
 
-// Upload progress update
-if (!empty($_GET['_progress'])) {
-    $RCMAIL->upload_progress();
-}
-
 $COMPOSE_ID = rcube_utils::get_input_value('_id', rcube_utils::INPUT_GPC);
 $COMPOSE    = null;
 
@@ -102,13 +97,18 @@ if ($uri) {
             && $RCMAIL->get_user_name() == rawurldecode($url['user'])
         ) {
             $message = new rcube_message($params['_uid'], $params['_mbox']);
+
+            if ($message && !empty($message->headers)) {
+                $attachment = rcmail_save_attachment($message, $params['_part'], $COMPOSE_ID);
+            }
         }
     }
 
-    if ($message && !empty($message->headers)
-        && ($attachment = rcmail_save_attachment($message, $params['_part'], $COMPOSE_ID))
-    ) {
-        rcmail_attachment_success($attachment, $uploadid);
+    $plugin = $RCMAIL->plugins->exec_hook('attachment_from_uri', array(
+        'attachment' => $attachment, 'uri' => $uri, 'compose_id' => $COMPOSE_ID));
+
+    if ($plugin['attachment']) {
+        rcmail_attachment_success($plugin['attachment'], $uploadid);
     }
     else {
         $OUTPUT->command('display_message', $RCMAIL->gettext('filelinkerror'), 'error');
@@ -221,7 +221,7 @@ function rcmail_attachment_success($attachment, $uploadid)
         $button = '';
     }
 
-    $link_content = sprintf('%s <span class="attachment-size"> (%s)</span>',
+    $link_content = sprintf('<span class="attachment-name">%s</span><span class="attachment-size">(%s)</span>',
         rcube::Q($attachment['name']), $RCMAIL->show_bytes($attachment['size']));
 
     $content_link = html::a(array(

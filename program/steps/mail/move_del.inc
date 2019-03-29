@@ -39,12 +39,12 @@ if ($RCMAIL->action == 'move' && !empty($_POST['_uid']) && strlen($_POST['_targe
     $target  = rcube_utils::get_input_value('_target_mbox', rcube_utils::INPUT_POST, true);
     $success = true;
 
-    foreach (rcmail::get_uids(null, null, $multifolder) as $mbox => $uids) {
+    foreach (rcmail::get_uids(null, null, $multifolder, rcube_utils::INPUT_POST) as $mbox => $uids) {
         if ($mbox === $target) {
-            $count += count($uids);
+            $count += is_array($uids) ? count($uids) : 1;
         }
         else if ($RCMAIL->storage->move_message($uids, $target, $mbox)) {
-            $count += count($uids);
+            $count += is_array($uids) ? count($uids) : 1;
             $sources[] = $mbox;
         }
         else {
@@ -54,8 +54,10 @@ if ($RCMAIL->action == 'move' && !empty($_POST['_uid']) && strlen($_POST['_targe
 
     if (!$success) {
         // send error message
-        if ($_POST['_from'] != 'show')
+        if ($_POST['_from'] != 'show') {
             $OUTPUT->command('list_mailbox');
+        }
+
         $RCMAIL->display_server_error('errormoving', null, $target == $trash ? 'delete' : '');
         $OUTPUT->send();
     }
@@ -73,16 +75,18 @@ if ($RCMAIL->action == 'move' && !empty($_POST['_uid']) && strlen($_POST['_targe
 }
 // delete messages
 else if ($RCMAIL->action == 'delete' && !empty($_POST['_uid'])) {
-    foreach (rcmail::get_uids(null, null, $multifolder) as $mbox => $uids) {
+    foreach (rcmail::get_uids(null, null, $multifolder, rcube_utils::INPUT_POST) as $mbox => $uids) {
         $del      += (int)$RCMAIL->storage->delete_message($uids, $mbox);
-        $count    += count($uids);
+        $count    += is_array($uids) ? count($uids) : 1;
         $sources[] = $mbox;
     }
 
     if (!$del) {
         // send error message
-        if ($_POST['_from'] != 'show')
+        if ($_POST['_from'] != 'show') {
             $OUTPUT->command('list_mailbox');
+        }
+
         $RCMAIL->display_server_error('errordeleting');
         $OUTPUT->send();
     }
@@ -161,8 +165,11 @@ if ($threading) {
 
 // add new rows from next page (if any)
 if ($addrows && $count && $uids != '*' && ($jump_back || $nextpage_count > 0)) {
+    // #5862: Don't add more rows than it was on the next page
+    $count = $jump_back ? null : min($nextpage_count, $count);
+
     $a_headers = $RCMAIL->storage->list_messages($mbox, NULL,
-        rcmail_sort_column(), rcmail_sort_order(), $jump_back ? NULL : $count);
+        rcmail_sort_column(), rcmail_sort_order(), $count);
 
     rcmail_js_message_list($a_headers, false);
 }

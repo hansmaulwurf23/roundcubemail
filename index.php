@@ -2,9 +2,9 @@
 /**
  +-------------------------------------------------------------------------+
  | Roundcube Webmail IMAP Client                                           |
- | Version 1.3-git                                                         |
+ | Version 1.4-git                                                         |
  |                                                                         |
- | Copyright (C) 2005-2016, The Roundcube Dev Team                         |
+ | Copyright (C) 2005-2018, The Roundcube Dev Team                         |
  |                                                                         |
  | This program is free software: you can redistribute it and/or modify    |
  | it under the terms of the GNU General Public License (with exceptions   |
@@ -44,7 +44,7 @@ $RCMAIL = rcmail::get_instance(0, $GLOBALS['env']);
 
 // Make the whole PHP output non-cacheable (#1487797)
 $RCMAIL->output->nocacheing_headers();
-$RCMAIL->output->common_headers();
+$RCMAIL->output->common_headers(!empty($_SESSION['user_id']));
 
 // turn on output buffering
 ob_start();
@@ -103,7 +103,7 @@ $RCMAIL->action = $startup['action'];
 // try to log in
 if ($RCMAIL->task == 'login' && $RCMAIL->action == 'login') {
     $request_valid = $_SESSION['temp'] && $RCMAIL->check_request();
-    $pass_charset  = $RCMAIL->config->get('password_charset', 'ISO-8859-1');
+    $pass_charset  = $RCMAIL->config->get('password_charset', 'UTF-8');
 
     // purge the session in case of new login when a session already exists
     $RCMAIL->kill_session();
@@ -232,7 +232,7 @@ if (empty($RCMAIL->user->ID)) {
 
     // check if installer is still active
     if ($RCMAIL->config->get('enable_installer') && is_readable('./installer/index.php')) {
-        $OUTPUT->add_footer(html::div(array('style' => "background:#ef9398; border:2px solid #dc5757; padding:0.5em; margin:2em auto; width:50em"),
+        $OUTPUT->add_footer(html::div(array('id' => 'login-addon', 'style' => "background:#ef9398; border:2px solid #dc5757; padding:0.5em; margin:2em auto; width:50em"),
             html::tag('h2', array('style' => "margin-top:0.2em"), "Installer script is still accessible") .
             html::p(null, "The install script of your Roundcube installation is still stored in its default location!") .
             html::p(null, "Please <b>remove</b> the whole <tt>installer</tt> folder from the Roundcube directory because
@@ -241,9 +241,17 @@ if (empty($RCMAIL->user->ID)) {
         ));
     }
 
-    $plugin = $RCMAIL->plugins->exec_hook('unauthenticated', array('task' => 'login', 'error' => $session_error));
+    $plugin = $RCMAIL->plugins->exec_hook('unauthenticated', array(
+            'task'      => 'login',
+            'error'     => $session_error,
+            'http_code' => !$session_error ? 401 : 200
+    ));
 
     $RCMAIL->set_task($plugin['task']);
+
+    if ($plugin['http_code'] == 401) {
+        header('HTTP/1.0 401 Unauthorized');
+    }
 
     $OUTPUT->send($plugin['task']);
 }
@@ -282,7 +290,7 @@ if (is_file($incfile = INSTALL_PATH . 'program/steps/'.$RCMAIL->task.'/func.inc'
 }
 
 // allow 5 "redirects" to another action
-$redirects = 0; $incstep = null;
+$redirects = 0;
 while ($redirects < 5) {
     // execute a plugin action
     if (preg_match('/^plugin\./', $RCMAIL->action)) {

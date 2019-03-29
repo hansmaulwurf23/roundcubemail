@@ -5,7 +5,7 @@
  | plugins/archive/localization/<lang>.inc                                |
  |                                                                       |
  | Localization file of the Roundcube Webmail Archive plugin             |
- | Copyright (C) 2013, The Roundcube Dev Team                            |
+ | Copyright (C) 2016, The Roundcube Dev Team                            |
  |                                                                       |
  | Licensed under the GNU General Public License version 3 or            |
  | any later version with exceptions for skins & plugins.                |
@@ -25,7 +25,9 @@ $labels['settingstitle'] = 'Arxiu';
 $labels['archivetype'] = 'Divideix arxiu per';
 $labels['archivetypeyear'] = 'Any (p.ex. Arxiu/2012)';
 $labels['archivetypemonth'] = 'Mes (p.ex. Arxiu/2012/06)';
+$labels['archivetypetbmonth'] = 'Mes - Compatible amb Thunderbird (ej. Arxiu/2012/2102-06)';
 $labels['archivetypefolder'] = 'Carpeta original';
 $labels['archivetypesender'] = 'Adreça del remitent';
 $labels['unkownsender'] = 'desconegut';
+$labels['readonarchive'] = 'Marca el missatge com a llegit a l\'arxiu';
 ?>

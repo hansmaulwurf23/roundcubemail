@@ -65,12 +65,12 @@ if ($_uids && $flag) {
         $input = array($mbox => '*');
     }
     else {
-        $input = rcmail::get_uids();
+        $input = rcmail::get_uids(null, null, $dummy, rcube_utils::INPUT_POST);
     }
 
     foreach ($input as $mbox => $uids) {
         $marked += (int)$RCMAIL->storage->set_flag($uids, $flag, $mbox);
-        $count += count($uids);
+        $count  += is_array($uids) ? count($uids) : 1;
     }
 
     if (!$marked) {
@@ -88,9 +88,10 @@ if ($_uids && $flag) {
     }
 
     if ($flag == 'DELETED' && $read_deleted && !empty($_POST['_ruid'])) {
-        $ruids = rcube_utils::get_input_value('_ruid', rcube_utils::INPUT_POST);
-        foreach (rcmail::get_uids($ruids) as $mbox => $uids) {
-            $read += (int)$RCMAIL->storage->set_flag($uids, 'SEEN', $mbox);
+        if ($ruids = rcube_utils::get_input_value('_ruid', rcube_utils::INPUT_POST)) {
+            foreach (rcmail::get_uids($ruids) as $mbox => $uids) {
+                $read += (int)$RCMAIL->storage->set_flag($uids, 'SEEN', $mbox);
+            }
         }
 
         if ($read && !$skip_deleted) {
@@ -158,8 +159,11 @@ if ($_uids && $flag) {
 
             // add new rows from next page (if any)
             if ($old_count && $_uids != '*' && ($jump_back || $nextpage_count > 0)) {
-                $a_headers = $RCMAIL->storage->list_messages($mbox, NULL,
-                    rcmail_sort_column(), rcmail_sort_order(), $jump_back ? NULL : $count);
+                // #5862: Don't add more rows than it was on the next page
+                $count = $jump_back ? null : min($nextpage_count, $count);
+
+                $a_headers = $RCMAIL->storage->list_messages($mbox, null,
+                    rcmail_sort_column(), rcmail_sort_order(), $count);
 
                 rcmail_js_message_list($a_headers, false);
             }

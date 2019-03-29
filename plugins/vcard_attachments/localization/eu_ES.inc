@@ -17,4 +17,8 @@
 */
 $labels['addvcardmsg'] = 'Gehitu vCard helbide-liburura';
 $labels['vcardsavefailed'] = 'Ezin da vCard gorde';
+$labels['attachvcard'] = 'Erantsi vCard';
+$labels['vcardattached'] = 'vCard fitxategia erantsia';
+$labels['vcard'] = 'vCard';
+$labels['forwardvcard'] = 'Birbidali vCard';
 ?>

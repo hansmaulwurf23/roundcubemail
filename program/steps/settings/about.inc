@@ -20,14 +20,22 @@
  +-----------------------------------------------------------------------+
 */
 
+define('RC_COPYRIGHT', 'Copyright &copy; 2005-2019, The Roundcube Dev Team');
+define('RC_LICENSE', 'This program is free software; you can redistribute it and/or modify it under the terms of the '
+            . '<a href="http://www.gnu.org/licenses/gpl.html" target="_blank">GNU General Public License</a> '
+            . 'as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.'
+            . '<br/>Some <a href="https://roundcube.net/license" target="_blank">exceptions</a> for skins &amp; plugins apply.');
 
 $OUTPUT->set_pagetitle($RCMAIL->gettext('about'));
 
-$OUTPUT->add_handler('supportlink', 'rcmail_supportlink');
-$OUTPUT->add_handler('pluginlist', 'rcmail_plugins_list');
+$OUTPUT->add_handlers(array(
+        'supportlink' => 'rcmail_supportlink',
+        'pluginlist'  => 'rcmail_plugins_list',
+        'copyright'   => function() { return RC_COPYRIGHT; },
+        'license'     => function() { return RC_LICENSE; },
+));
 
 $OUTPUT->send('about');
-
 
 
 function rcmail_supportlink($attrib)
@@ -93,9 +101,9 @@ function rcmail_plugins_list($attrib)
         $table->add_row();
         $table->add('name', rcube::Q($data['name'] ?: $name));
         $table->add('version', rcube::Q($data['version']));
-        $table->add('license', $data['license_uri'] ? html::a(array('target' => '_blank', href=> rcube::Q($data['license_uri'])),
+        $table->add('license', $data['license_uri'] ? html::a(array('target' => '_blank', 'href' => rcube::Q($data['license_uri'])),
             rcube::Q($data['license'])) : $data['license']);
-        $table->add('source', $uri ? html::a(array('target' => '_blank', href=> rcube::Q($uri)),
+        $table->add('source', $uri ? html::a(array('target' => '_blank', 'href' => rcube::Q($uri)),
             rcube::Q($RCMAIL->gettext('download'))) : '');
     }
 

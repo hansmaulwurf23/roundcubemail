@@ -45,6 +45,7 @@ abstract class rcube_session
     protected $cookiename   = 'roundcube_sessauth';
     protected $ip_check     = false;
     protected $logging      = false;
+    protected $ignore_write = false;
 
 
     /**
@@ -101,6 +102,11 @@ abstract class rcube_session
      */
     public function register_session_handler()
     {
+        if (session_id()) {
+            // Session already exists, skip
+            return;
+        }
+
         ini_set('session.serialize_handler', 'php');
 
         // set custom functions for PHP session management
@@ -274,11 +280,16 @@ abstract class rcube_session
      * Generate and set new session id
      *
      * @param boolean $destroy If enabled the current session will be destroyed
+     *
      * @return bool
      */
-    public function regenerate_id($destroy=true)
+    public function regenerate_id($destroy = true)
     {
+        // Since PHP 7.0 session_regenerate_id() will cause the old
+        // session data update, we don't need this
+        $this->ignore_write = true;
         session_regenerate_id($destroy);
+        $this->ignore_write = false;
 
         $this->vars = null;
         $this->key  = session_id();
@@ -300,7 +311,7 @@ abstract class rcube_session
             $cache = null;
         }
         // use internal data for fast requests (up to 0.5 sec.)
-        else if ($key == $this->key && (!$this->vars || $ts - $this->start < 0.5)) {
+        else if ($key == $this->key && (!$this->vars || microtime(true) - $this->start < 0.5)) {
             $cache = $this->vars;
         }
         else { // else read data again
@@ -462,7 +473,7 @@ abstract class rcube_session
      * Unserialize session data
      * http://www.php.net/manual/en/function.session-decode.php#56106
      */
-    protected function unserialize($str)
+    public static function unserialize($str)
     {
         $str    = (string)$str;
         $endptr = strlen($str);

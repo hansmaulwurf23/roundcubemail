@@ -32,7 +32,7 @@
 
 /**
  * Roundcube Treelist widget class
- * @contructor
+ * @constructor
  */
 function rcube_treelist_widget(node, p)
 {
@@ -89,12 +89,16 @@ function rcube_treelist_widget(node, p)
   this.intersects = intersects;
   this.droppable = droppable;
   this.draggable = draggable;
+  this.is_draggable = is_draggable;
   this.update = update_node;
   this.insert = insert;
   this.remove = remove;
   this.get_item = get_item;
   this.get_node = get_node;
   this.get_selection = get_selection;
+  this.get_next = get_next;
+  this.get_prev = get_prev;
+  this.get_single_selection = get_selection;
   this.is_search = is_search;
   this.reset_search = reset_search;
 
@@ -464,10 +468,11 @@ function rcube_treelist_widget(node, p)
    */
   function remove(id)
   {
-    var node, li;
+    var node, li, parent;
 
     if (node = indexbyid[id]) {
       li = id2dom(id, true);
+      parent = li.parent();
       li.remove();
 
       node.deleted = true;
@@ -475,6 +480,12 @@ function rcube_treelist_widget(node, p)
 
       if (search_active) {
         id2dom(id, false).remove();
+      }
+
+      // remove tree-toggle button and children list
+      if (!parent.children().length) {
+        parent.parent().find('div.treetoggle').remove();
+        parent.remove();
       }
 
       return true;
@@ -506,9 +517,10 @@ function rcube_treelist_widget(node, p)
   /**
    *
    */
-  function reset(keep_content)
+  function reset(keep_content, keep_selection)
   {
-    select('');
+    if (!keep_selection)
+      select('');
 
     data = [];
     indexbyid = {};
@@ -533,7 +545,7 @@ function rcube_treelist_widget(node, p)
       container.html('');
     }
 
-    reset_search();
+    reset_search(keep_selection);
   }
 
   /**
@@ -598,7 +610,7 @@ function rcube_treelist_widget(node, p)
   /**
    * 
    */
-  function reset_search()
+  function reset_search(nosel)
   {
     if (searchfield)
       searchfield.val('');
@@ -611,7 +623,7 @@ function rcube_treelist_widget(node, p)
     me.triggerEvent('search', { query: false, last: last_search });
     last_search = '';
 
-    if (selection)
+    if (selection && !nosel)
       select(selection);
   }
 
@@ -921,6 +933,51 @@ function rcube_treelist_widget(node, p)
   }
 
 
+  function get_next()
+  {
+    var node, child;
+    if (selection && (node = id2dom(selection))) {
+      child = node.children('ul').children('li:first');
+      if (child.length) {
+        return dom2id(child);
+      }
+
+      child = node.next();
+      if (child.length) {
+        return dom2id(child);
+      }
+
+      while ((node = node.parent('ul').parent('li')) && node.length) {
+        child = node.next();
+        if (child.length) {
+          return dom2id(child);
+        }
+      }
+    }
+  }
+
+  function get_prev()
+  {
+    var node, prev, child;
+    if (selection && (node = id2dom(selection))) {
+      prev = node.prev();
+      child = prev.find('li:last');
+
+      if (child.length) {
+        return dom2id(child);
+      }
+
+      if (prev.length) {
+        return dom2id(prev);
+      }
+
+      node = node.parent().parent();
+      if (node.length && node.is('li')) {
+        return dom2id(node);
+      }
+    }
+  }
+
   ///// drag & drop support
 
   /**
@@ -967,8 +1024,7 @@ function rcube_treelist_widget(node, p)
 
     // enable auto-scrolling of list container
     if (container.height() > container.parent().height()) {
-      container.parent()
-        .mousemove(function(e) {
+      container.parent().on('mousemove.treelist', function(e) {
           var scroll = 0,
             mouse = rcube_event.get_mouse_pos(e);
           mouse.y -= container.parent().offset().top;
@@ -988,13 +1044,13 @@ function rcube_treelist_widget(node, p)
             window.clearTimeout(scroll_timer);
             scroll_timer = null;
           }
-        })
-        .mouseleave(function() {
+      })
+      .on('mouseleave.treelist', function() {
           if (scroll_timer) {
             window.clearTimeout(scroll_timer);
             scroll_timer = null;
           }
-        });
+      });
     }
   }
 
@@ -1003,6 +1059,9 @@ function rcube_treelist_widget(node, p)
    */
   function drag_end()
   {
+    container.parent().off('.treelist');
+    $('li.droptarget', container).removeClass('droptarget');
+
     if (!drag_active)
       return;
 
@@ -1014,8 +1073,6 @@ function rcube_treelist_widget(node, p)
       autoexpand_timer = null;
       autoexpand_item = null;
     }
-
-    $('li.droptarget', container).removeClass('droptarget');
   }
 
   /**
@@ -1189,6 +1246,11 @@ function rcube_treelist_widget(node, p)
     $('li:not(.virtual)', container).draggable(my_opts);
 
     return this;
+  }
+
+  function is_draggable()
+  {
+    return !!ui_draggable;
   }
 }
 
