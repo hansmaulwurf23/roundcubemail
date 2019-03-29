@@ -598,20 +598,14 @@ class password extends rcube_plugin
                 $method = 'CRAM-MD5';
             }
 
-            $spec = array(0 => array('pipe', 'r'), 1 => array('pipe', 'w'), 2 => array('file', '/dev/null', 'a'));
-            $pipe = proc_open("$dovecotpw -s '$method'", $spec, $pipes);
-
-            if (!is_resource($pipe)) {
-                return false;
-            }
+            $pipe = proc_open("$dovecotpw -s '$method'", array(0 => array('pipe', 'r'), 1 => array('pipe', 'w'), 2 => array('file', '/dev/null', 'a')), $pipes);
+            if (!is_resource($pipe)) return false;
 
             fwrite($pipes[0], $password . "\n", 1+strlen($password));
             usleep(1000);
             fwrite($pipes[0], $password . "\n", 1+strlen($password));
-
-            $crypted = trim(stream_get_contents($pipes[1]), "\n");
-
             fclose($pipes[0]);
+            $crypted = trim(stream_get_contents($pipes[1]), "\n");
             fclose($pipes[1]);
             proc_close($pipe);
 
