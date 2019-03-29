@@ -590,12 +590,7 @@ class rcube_sieve_script
                     $prefix .= $line . "\n";
                 }
 
-                // check for empty lines within comments
-                do {
-                    $position = $endl + 1;
-                    $endl = strpos($script, "\n", $position) ?: $length;
-                    $line = substr($script, $position, $endl - $position);
-                } while ($position < $length && preg_match('/^\s*$/', $line));
+                $position = $endl + 1;
             }
 
             // handle script header
